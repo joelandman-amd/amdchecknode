@@ -180,7 +180,7 @@ def command_line_options():
    p.add_argument('--config', help="set config directory")
    p.add_argument('--slurm', help="set slurm directory")
    #p.add_argument('--parallel', help="run tests in parallel (defaults to serial)")
-   #p.add_argument('--timeout', help="timeout in seconds for entire script to complete")
+   p.add_argument('--timeout', help="timeout in seconds for each script to complete")
    p.add_argument('--dryrun', action='store_true',help="print test names that would be run without running them")
    p.add_argument('--redfish-proxy', help="set redfish proxy server")
    args = p.parse_args()
@@ -263,6 +263,8 @@ def send_redfish_event_to_proxy(problem='',test=''):
 
 args = command_line_options()
 find_and_read_config(fname=args.config)
+if args.timeout:
+   TIMEOUT=args.timeout
 
 check_if_running()
 if prepare_run_directory() == False:
@@ -298,7 +300,6 @@ else:
 test_list = os.listdir(TESTDIR)
 test_list.sort()
 tests = {}
-
 
 
 # run them in serial for now
