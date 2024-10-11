@@ -10,7 +10,7 @@ BINDIR=${TOPDIR}/bin
 CONFDIR=rvs/
 
 # this will point to a specific RVS config file.
-TEST=${CONFDIR}/mem.conf
+TEST=${CONFDIR}/babel.conf
 
 # OPTIONS: for the RVS run
 OPTIONS=-v
