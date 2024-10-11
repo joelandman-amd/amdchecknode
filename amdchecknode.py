@@ -29,7 +29,9 @@ t_start = time.time()
 ALL=False
 VERBOSE=False
 DRYRUN=False
+FORCE=False
 RUNDIR='/tmp/amdchecknode'
+ROCMDIR='/opt/rocm'
 TESTDIR=''
 TIMEOUT=60
 CHKNODECONF=''
@@ -58,7 +60,8 @@ def sigexits(number,frame):
    print(f"""TERMINAL SIGNAL number {number} caught\n{frame} """)
 
    # remove the lock file
-   os.unlink("{RUNDIR}/lock")
+   fn=f"{RUNDIR}/lock"
+   os.unlink(fn)
    exit(1)
 
 def sigwarns(number,frame):
@@ -89,10 +92,11 @@ def sigwarns(number,frame):
 #
 #  VERBOSE           integer        1 == true, 0 == false
 #  DRYRUN            integer        1 == true, 0 == false
+#  FORCE             integer        1 == true, 0 == false
 
 
 def find_and_read_config(fname=''):
-   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF
+   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF, ROCMDIR, FORCE
    if fname == None:
       fname=''
 
@@ -134,8 +138,8 @@ def find_and_read_config(fname=''):
          if kvp_l[0] == 'TESTDIR':
             TESTDIR=kvp_l[1]
          
-         if kvp_l[0] == 'SLURM_CONF':
-            SLURM_CONF=kvp_l[1]
+         if kvp_l[0] == 'ROCMDIR':
+            ROCMDIR=kvp_l[1]
 
          if kvp_l[0] == 'RUNDIR':
             RUNDIR=kvp_l[1]
@@ -154,11 +158,20 @@ def find_and_read_config(fname=''):
                DRYRUN=False
             else:
                DRYRUN=True
+
+         if kvp_l[0] == 'FORCE':
+            if kvp_l[1] == 0:
+               FORCE=False
+            else:
+               FORCE=True
+            
+  
+
    except:
       pass         
 
 def command_line_options():
-   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF
+   
    p = ap.ArgumentParser( 
       prog='amdchecknode',
       description='Amdchecknode runs tests to verify node health before a scheduler based job launch'
@@ -172,13 +185,14 @@ def command_line_options():
    p.add_argument('-v', '--verbose', action='store_true', help="force verbose")
    p.add_argument('--testdir', help="set test directory")
    p.add_argument('--rundir', help="set run directory")
-   
+   p.add_argument('--rocmdir', help="set rocm install directory")
    p.add_argument('--config', help="set config directory")
    #p.add_argument('--slurm', help="set slurm directory")
    #p.add_argument('--parallel', help="run tests in parallel (defaults to serial)")
    p.add_argument('--timeout', help="timeout in seconds for each script to complete")
    p.add_argument('--dryrun', action='store_true',help="print test names that would be run without running them")
    p.add_argument('--settings', action='store_true', help="report variable settings")
+   p.add_argument('--force', action='store_true', help="force run to occur despite a lock file being present")
    args = p.parse_args()
    return args
  
@@ -210,6 +224,12 @@ def check_if_running():
    if exists(lockfn):
       if VERBOSE: print("amdchecknode lock in place, amdchecknode is running")
       return True
+   return False
+
+def remove_run_lock():
+   lockfn=f"{RUNDIR}/lock"   
+   if exists(lockfn):
+      os.unlink(lockfn)
    return False
 
 def prepare_run_directory():
@@ -245,7 +265,7 @@ def send_failure_notification():
    pass
 
 def before_run():
-   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, SLURM_CONF, RUNDIR
+   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE
    args = command_line_options()
    find_and_read_config(fname=args.config)   
    
@@ -262,30 +282,32 @@ TIMEOUT={TIMEOUT}
 DRYRUN={DRYRUN}
 TESTDIR={TESTDIR}
 RUNDIR={RUNDIR}
+ROCMDIR={ROCMDIR}
+FORCE={FORCE}
 """)
       exit(0)
 
    if check_if_running():
       print("amdchecknode is currently running\n")
-      exit(0)
+      if FORCE: exit(0)
 
    if prepare_run_directory() == False:
       if VERBOSE: print(f"Unable to create {RUNDIR}")
       exit(1)
 
-   mkdir("{RUNDIR}/journalcache")
-   touch("{RUNDIR}/lock")
-   if set("{RUNDIR}/state","running") == False:
+   mkdir(f"{RUNDIR}/journalcache")
+   touch(f"{RUNDIR}/lock")
+   if set(f"{RUNDIR}/state","running") == False:
       print(f"Unable to create {RUNDIR}/state ")
       exit(1)
 
 
    # sanity check boot status
    if re.match(r"No jobs running",run('systemctl list-jobs')[1]):
-      touch("{RUNDIR}/booted")
+      touch(f"{RUNDIR}/booted")
    else:
       if VERBOSE: print("Node is still booting\n")
-      os.unlink("{RUNDIR}/booted")
+      os.unlink(f"{RUNDIR}/booted")
       exit(1)
    
 
@@ -302,9 +324,9 @@ def main():
 
    PASSED=True
    # run them in serial for now
-   for test in test_list:
-      testname = TESTDIR + '/' + test
-      if VERBOSE: print(f"test = {test}, file = {testname}")
+   for test in test_list:       
+      testname = f"ROCMDIR={ROCMDIR} {TESTDIR}/{test} "
+      if VERBOSE: print(f"test = {test}, cmd = \'{testname}\'")
       if DRYRUN:
          print(" ... Dry run, not actually running this code\n")
       else:
@@ -323,7 +345,15 @@ def main():
                         'returncode': ret[0],
                         'timed_out': to
                         }
+         if ret[0] != 0:
+            PASSED=False
+            print(f"test {test} exited with a non-zero return code, terminating run\n")
+            print(f"\nstdout={ret[1]}\n\nstderr={ret[2]}\n\n")
+            break    # short circuit loop
          if VERBOSE: print(f" End of run {test}\n delta t = {t_final-t_initial:.3f}\n return code = {ret[0]}\n stderr = {ret[2]}\n stdout = {ret[1]}\n")
+   if not(PASSED):
+      #raise RuntimeError(f"test {test} exited with a non-zero return code, terminating run")
+      exit(1)
 
 if __name__ == '__main__':
    before_run()
@@ -333,5 +363,16 @@ if __name__ == '__main__':
    if VERBOSE: print("starting main process\n")
    p1.start()
    p1.join(timeout=TIMEOUT)
+   ec = p1.exitcode
    p1.terminate()
    if VERBOSE: print("completed")
+   remove_run_lock()
+   if ec != 0:
+      if VERBOSE: print(f"Exiting due to a test failure\n")
+      exit(1)
+   else:
+      if VERBOSE: print(f"amdchecknode passed all tests\n")
+
+
+
+

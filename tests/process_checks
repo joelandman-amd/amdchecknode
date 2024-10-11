@@ -2,5 +2,5 @@
 
 # verbose Checking processes
 # munged is needed for SLURM user identification
-systemctl is-active  munge --quiet && exit 0 
-exit 1
+systemctl is-active  munge --quiet 
+exit $?
