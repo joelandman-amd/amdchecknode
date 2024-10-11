@@ -15,6 +15,7 @@
 #
 
 import argparse as ap
+from multiprocessing import Process
 import os
 from pathlib import Path
 import re
@@ -25,23 +26,13 @@ import time
 
 t_start = time.time()
 
-
-SLURM_CONF="/etc/slurm/slurm.conf"
-topdir = "/run/checknode"
 ALL=False
-BOOT=False
-CHECKONLY=False
-LOCALONLY=False
-ERRORCNT=False
-ERRORSTR=''
-UNDRAIN=False
 VERBOSE=False
-MANUALNODESCREEN=False
 DRYRUN=False
+RUNDIR='/tmp/amdchecknode'
 TESTDIR=''
-REDFISHPROXYSERVER='http://rps/'
-TIMEOUT=10
-
+TIMEOUT=60
+CHKNODECONF=''
 
 # set up signal handlers so as to do the right thing
 # if we catch specific signals
@@ -65,10 +56,9 @@ def sig_handler_setup():
    
 def sigexits(number,frame):
    print(f"""TERMINAL SIGNAL number {number} caught\n{frame} """)
-   # send stuff to slurm
 
    # remove the lock file
-   os.unlink("/run/checknode/lock")
+   os.unlink("{RUNDIR}/lock")
    exit(1)
 
 def sigwarns(number,frame):
@@ -78,7 +68,7 @@ def sigwarns(number,frame):
 #
 # Find top level tests directory.  In order, look for
 #  1) command line arguments (--testdir=/path/to/testdir
-#      --config=/path/to/config --slurm=/path/to/slurm)
+#      --config=/path/to/config --rundir=/path/to/rundir)
 #  1) environment variable AMDCHECKNODEDIR
 #  2) /etc/amdchecknode.conf
 #  3) $HOME/.config/amdchecknode.conf
@@ -93,16 +83,16 @@ def sigwarns(number,frame):
 #
 #  key               type           value 
 #  TESTDIR           string         path to amdchecknode tests directory
-#  SLURM_CONF        string         path to slurm.conf
+#  RUNDIR            string         path to run directory where temp files are stored for IPC
 #
 #  Optional keys
 #
 #  VERBOSE           integer        1 == true, 0 == false
-#  REDFISHPROXYSERVER string        http(s)://URL_TO_REDFISH_PROXY_SERVER/
+#  DRYRUN            integer        1 == true, 0 == false
 
 
 def find_and_read_config(fname=''):
-   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, REDFISHPROXYSERVER, TIMEOUT
+   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF
    if fname == None:
       fname=''
 
@@ -125,64 +115,70 @@ def find_and_read_config(fname=''):
    # if we still don't have a file name (fname) for the config,
    # print an error, and exit with 1
    if fname == '':
-      print("Error: unable to find amdchecknode.conf\n")
-      exit(1)
-   
-   with open(fname,"r") as f:
-      lines=f.readlines()
-   
-   # minimal parser, pounds are comments, and only look at material to the 
-   # left of them.  Skip blank lines
-   for l in lines:
-      kvp=l.split("#")[0].rstrip()
-      if kvp == '':
-         continue # ignore blank lines
+      print("WARNING: unable to find amdchecknode.conf\n")
       
-      kvp_l = kvp.split('=')
-      if kvp_l[0] == 'TESTDIR':
-         TESTDIR=kvp_l[1]
+   CHKNODECONF=fname
+   try:
+         
+      with open(fname,"r") as f:
+         lines=f.readlines()
       
-      if kvp_l[0] == 'SLURM_CONF':
-         SLURM_CONF=kvp_l[1]
-
-      if kvp_l[0] == 'REDFISHPROXYSERVER':
-         REDFISHPROXYSERVER=kvp_l[1]
-
-      if kvp_l[0] == 'TIMEOUT':
-         TIMEOUT=kvp_l[1]
-    
-      if kvp_l[0] == 'VERBOSE':
-         if kvp_l[1] == 0:
-            VERBOSE=False
-         else:
-            VERBOSE=True
+      # minimal parser, pounds are comments, and only look at material to the 
+      # left of them.  Skip blank lines
+      for l in lines:
+         kvp=l.split("#")[0].rstrip()
+         if kvp == '':
+            continue # ignore blank lines
          
-      if kvp_l[0] == 'DRYRUN':
-         if kvp_l[1] == 0:
-            DRYRUN=False
-         else:
-            DRYRUN=True
+         kvp_l = kvp.split('=')
+         if kvp_l[0] == 'TESTDIR':
+            TESTDIR=kvp_l[1]
          
+         if kvp_l[0] == 'SLURM_CONF':
+            SLURM_CONF=kvp_l[1]
+
+         if kvp_l[0] == 'RUNDIR':
+            RUNDIR=kvp_l[1]
+
+         if kvp_l[0] == 'TIMEOUT':
+            TIMEOUT=float(kvp_l[1])
+      
+         if kvp_l[0] == 'VERBOSE':
+            if kvp_l[1] == 0:
+               VERBOSE=False
+            else:
+               VERBOSE=True
+            
+         if kvp_l[0] == 'DRYRUN':
+            if kvp_l[1] == 0:
+               DRYRUN=False
+            else:
+               DRYRUN=True
+   except:
+      pass         
 
 def command_line_options():
+   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF
    p = ap.ArgumentParser( 
       prog='amdchecknode',
       description='Amdchecknode runs tests to verify node health before a scheduler based job launch'
    )
    #p.add_argument('-a', '--all', action='store_true', help="run all tests")
-   p.add_argument('-b', '--boot-mode', action='store_true', help="boot mode")
+   #p.add_argument('-b', '--boot-mode', action='store_true', help="boot mode")
    #p.add_argument('-c', '--check-node-only', action='store_true', help="check node only")
    #p.add_argument('-l', '--local-checks-only', action='store_true', help="local checks only")
    #p.add_argument('-r', '--node-screen', action='store_true', help="run node screen")
-   p.add_argument('-u', '--force-undrain', action='store_true',help="force slurm undrain")
+   #p.add_argument('-u', '--force-undrain', action='store_true',help="force slurm undrain")
    p.add_argument('-v', '--verbose', action='store_true', help="force verbose")
    p.add_argument('--testdir', help="set test directory")
+   p.add_argument('--rundir', help="set run directory")
+   
    p.add_argument('--config', help="set config directory")
-   p.add_argument('--slurm', help="set slurm directory")
+   #p.add_argument('--slurm', help="set slurm directory")
    #p.add_argument('--parallel', help="run tests in parallel (defaults to serial)")
    p.add_argument('--timeout', help="timeout in seconds for each script to complete")
    p.add_argument('--dryrun', action='store_true',help="print test names that would be run without running them")
-   p.add_argument('--redfish-proxy', help="set redfish proxy server")
+   p.add_argument('--settings', action='store_true', help="report variable settings")
    args = p.parse_args()
    return args
  
@@ -209,13 +205,15 @@ def touch(path):
    return result
 
 def check_if_running():
-   if exists("/run/checknode/lock"):
+   lockfn=f"{RUNDIR}/lock"
+   if VERBOSE: print(f"looking for {lockfn}")
+   if exists(lockfn):
       if VERBOSE: print("amdchecknode lock in place, amdchecknode is running")
       return True
    return False
 
 def prepare_run_directory():
-   return mkdir(topdir)
+   return mkdir(RUNDIR)
 
 def set(path,content):
    p = Path(path)
@@ -226,7 +224,8 @@ def set(path,content):
       pass
    return result
 
-def run(cmdstr,timeout=60):
+def run(cmdstr):
+   global TIMEOUT
    # run a command, return a return code, stdout, and stderr
    # if thgere is an error running the command, return None, and two blank strings
    try:
@@ -234,11 +233,10 @@ def run(cmdstr,timeout=60):
                   capture_output=True,
                   shell=True,
                   universal_newlines=True,
-                  timeout=timeout
+                  timeout=TIMEOUT
       )
    except:
       return (None,"","")
-   
    return (s.returncode, s.stdout, s.stderr)
 
 def send_failure_notification():
@@ -246,84 +244,94 @@ def send_failure_notification():
    # or something similar
    pass
 
-def send_redfish_event_to_proxy(problem='',test=''):
-   # Note that this will need to go through a proxy to ensure
-   # that BMC user IDs and passwords are not leaked.
+def before_run():
+   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, SLURM_CONF, RUNDIR
+   args = command_line_options()
+   find_and_read_config(fname=args.config)   
+   
+   if args.testdir:  TESTDIR=args.testdir
+   if args.timeout:  TIMEOUT=float(args.timeout)
+   if args.dryrun:   DRYRUN=args.dryrun
+   if args.rundir:   RUNDIR=args.rundir
+   if args.verbose:  VERBOSE=args.verbose
+   
+   if args.settings:
+      print(f"""
+VERBOSE={VERBOSE}            
+TIMEOUT={TIMEOUT}
+DRYRUN={DRYRUN}
+TESTDIR={TESTDIR}
+RUNDIR={RUNDIR}
+""")
+      exit(0)
 
-   hname = socket.gethostname()
+   if check_if_running():
+      print("amdchecknode is currently running\n")
+      exit(0)
 
-   cmd = f"curl -k -X POST {REDFISHPROXYSERVER}/Event -F hostname={hname} -F problem={problem} test={test}"  
+   if prepare_run_directory() == False:
+      if VERBOSE: print(f"Unable to create {RUNDIR}")
+      exit(1)
 
-
-#
-# begin
-#
-
-
-
-args = command_line_options()
-find_and_read_config(fname=args.config)
-if args.timeout:
-   TIMEOUT=args.timeout
-
-check_if_running()
-if prepare_run_directory() == False:
-   if VERBOSE: print(f"Unable to create {topdir}")
-   exit(1)
-
-mkdir("/run/checknode/journalcache")
-touch("/run/checknode/lock")
-if set("/run/checknode/state","running") == False:
-   print(f"Unable to create /run/checknode/state ")
-   exit(1)
-
-###############################################################################
-# Process arguments
-###############################################################################
-
-if BOOT:
-   touch("/run/checknode/booted")
-else:
-   # sanity check boot status
-   if re.match(r"No jobs running",run('systemctl list-jobs')[1]):
-      BOOT=1
-      touch("/run/checknode/booted")
-   else:
-      if VERBOSE: print("Node is still booting\n")
+   mkdir("{RUNDIR}/journalcache")
+   touch("{RUNDIR}/lock")
+   if set("{RUNDIR}/state","running") == False:
+      print(f"Unable to create {RUNDIR}/state ")
       exit(1)
 
 
-################################################################################
-# tests: return a 0 on success, and non-zero on failure
-################################################################################
-
-test_list = os.listdir(TESTDIR)
-test_list.sort()
-tests = {}
-
-
-# run them in serial for now
-for test in test_list:
-   testname = TESTDIR + '/' + test
-   if VERBOSE: print(f"test = {test}, file = {testname}")
-   if args.dryrun:
-      print(" ... Dry run, not actually running this code\n")
+   # sanity check boot status
+   if re.match(r"No jobs running",run('systemctl list-jobs')[1]):
+      touch("{RUNDIR}/booted")
    else:
-      if VERBOSE: print(f" Beginning run of {test}")
-      t_initial = time.time()
-      ret = run(testname,timeout=TIMEOUT)
-      t_final = time.time()
-      dt = t_final - t_initial
-      to = False
-      if dt >= TIMEOUT:
-         to = True
-      tests[test] = {'name': test, 
-                     'runtime': t_final-t_initial, 
-                     'stderr': ret[2],
-                     'stdout': ret[1],
-                     'returncode': ret[0],
-                     'timed_out': to
-                     }
-      if VERBOSE: print(f" End of run {test}\n delta t = {t_final-t_initial:.3f}\n return code = {ret[0]}\n stderr = {ret[2]}\n stdout = {ret[1]}\n")
-
+      if VERBOSE: print("Node is still booting\n")
+      os.unlink("{RUNDIR}/booted")
+      exit(1)
    
+
+
+def main():
+   global TIMEOUT, DRYRUN, VERBOSE
+   ################################################################################
+   # tests: return a 0 on success, and non-zero on failure
+   ################################################################################
+
+   test_list = os.listdir(TESTDIR)
+   test_list.sort()
+   tests = {}
+
+   PASSED=True
+   # run them in serial for now
+   for test in test_list:
+      testname = TESTDIR + '/' + test
+      if VERBOSE: print(f"test = {test}, file = {testname}")
+      if DRYRUN:
+         print(" ... Dry run, not actually running this code\n")
+      else:
+         if VERBOSE: print(f" Beginning run of {test}")
+         t_initial = time.time()
+         ret = run(testname)
+         t_final = time.time()
+         dt = t_final - t_initial
+         to = False
+         if dt >= TIMEOUT:
+            to = True
+         tests[test] = {'name': test, 
+                        'runtime': t_final-t_initial, 
+                        'stderr': ret[2],
+                        'stdout': ret[1],
+                        'returncode': ret[0],
+                        'timed_out': to
+                        }
+         if VERBOSE: print(f" End of run {test}\n delta t = {t_final-t_initial:.3f}\n return code = {ret[0]}\n stderr = {ret[2]}\n stdout = {ret[1]}\n")
+
+if __name__ == '__main__':
+   before_run()
+
+   # run main() with a timeout
+   p1 = Process(target=main, name='main loop')
+   if VERBOSE: print("starting main process\n")
+   p1.start()
+   p1.join(timeout=TIMEOUT)
+   p1.terminate()
+   if VERBOSE: print("completed")
