@@ -2,18 +2,19 @@
 
 # use a fixed ROCMPATH 
 #
-TOPDIR?=/opt/rocm
-BINDIR=${TOPDIR}/bin
+ROCMDIR=/opt/rocm
+BINDIR=${ROCMDIR}/bin
 
 # this is where the rvs tests are stored
-#CONFDIR=${TOPDIR}/share/rocm-validation-suite/conf
+#CONFDIR=${ROCMDIR}/share/rocm-validation-suite/conf
 CONFDIR=rvs/
 
 # this will point to a specific RVS config file.
 TEST=${CONFDIR}/pebb_single.conf
 
 # OPTIONS: for the RVS run
-OPTIONS=-v
+OPTIONS=
 
 # now run the test
 ${BINDIR}/rvs ${OPTIONS} -c ${TEST}
+echo $?

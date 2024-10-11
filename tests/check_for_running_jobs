@@ -4,8 +4,9 @@
 
 
 result=1 # assume a running job
-if ( `scontrol listpids 2>&1 | grep -q "No job steps" ` ); then
- result=0 # no running jobs found via slurm
+
+scontrol listpids
+if [ $? == 1 ]; then
+    exit 0
 fi
-echo $result
-exit $result
+exit 1
