@@ -136,13 +136,14 @@ def find_and_read_config(fname=''):
          
          kvp_l = kvp.split('=')
          if kvp_l[0] == 'TESTDIR':
-            TESTDIR=kvp_l[1]
+            TESTDIR=expand_shell_variable(kvp_l[1])
+            
          
          if kvp_l[0] == 'ROCMDIR':
-            ROCMDIR=kvp_l[1]
+            ROCMDIR=expand_shell_variable(kvp_l[1])
 
          if kvp_l[0] == 'RUNDIR':
-            RUNDIR=kvp_l[1]
+            RUNDIR=expand_shell_variable(kvp_l[1])
 
          if kvp_l[0] == 'TIMEOUT':
             TIMEOUT=float(kvp_l[1])
@@ -169,6 +170,14 @@ def find_and_read_config(fname=''):
 
    except:
       pass         
+
+def expand_shell_variable(V):
+    p = re.findall(r'^\$(\S+)',V)
+    if len(p) > 0:
+        return p[0]
+    else:
+        return V
+
 
 def command_line_options():
    
@@ -264,16 +273,24 @@ def send_failure_notification():
    # or something similar
    pass
 
+
 def before_run():
    global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE
    args = command_line_options()
    find_and_read_config(fname=args.config)   
-   
+   args = command_line_options() 
    if args.testdir:  TESTDIR=args.testdir
    if args.timeout:  TIMEOUT=float(args.timeout)
    if args.dryrun:   DRYRUN=args.dryrun
    if args.rundir:   RUNDIR=args.rundir
    if args.verbose:  VERBOSE=args.verbose
+   if args.rocmdir:  ROCMDIR=args.rocmdir
+#   get_env_if_needed(TESTDIR)
+#   get_env_if_needed(RUNDIR)
+#   get_env_if_needed(ROCMDIR)
+#   get_env_if_needed(RUNDIR)
+
+
    
    if args.settings:
       print(f"""
