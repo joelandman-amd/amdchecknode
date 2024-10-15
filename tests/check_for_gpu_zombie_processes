@@ -1,0 +1,14 @@
+#!/bin/bash
+# check_running_jobs.sh: if there are no running jobs via slurm, then 
+# print and return a 0.  Otherwise, print and return a 1.
+
+
+result=0 # assume no running jobs
+
+for GPU in `amd-smi process --csv`; do
+  if ( echo $GPU | grep -v -q "No running processes detected" ); then
+    result=1
+  fi
+done
+
+exit $result

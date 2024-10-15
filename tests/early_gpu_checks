@@ -1,3 +1,11 @@
 #!/bin/bash
 
-exit 0
+count=$(amd-smi list | grep GPU | wc -l)
+
+if  [ $count -ne 8 ]; then
+  echo "Number of GPUs is not 8! GPU count = " $count
+  exit 1
+else
+  echo "Number of GPUs is correct ($count)"
+  exit 0
+fi
