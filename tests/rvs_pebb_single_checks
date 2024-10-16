@@ -2,7 +2,6 @@
 
 # use a fixed ROCMPATH 
 #
-ROCMDIR=/opt/rocm
 BINDIR=${ROCMDIR}/bin
 
 # this is where the rvs tests are stored
