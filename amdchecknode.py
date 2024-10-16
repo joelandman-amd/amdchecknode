@@ -38,6 +38,7 @@ TESTDIR=''
 TIMEOUT=60
 CHKNODECONF=''
 RUNFROM=os.path.abspath(os.path.dirname(__file__))
+TESTS=[]
 
 # set up signal handlers so as to do the right thing
 # if we catch specific signals
@@ -85,7 +86,7 @@ def sigwarns(number,frame):
 #  
 #  Structure of amdchecknode.conf file are simple key value pairs.
 # 
-#  Mandatory keys
+#  Mandatory keys (or you need to use command line arguments to set)
 #
 #  key               type           value 
 #  TESTDIR           string         path to amdchecknode tests directory
@@ -97,6 +98,7 @@ def sigwarns(number,frame):
 #  DRYRUN            integer        1 == true, 0 == false
 #  FORCE             integer        1 == true, 0 == false
 #  TIMESTAMP         integer        1 == true, 0 == false
+#  
 
 
 def find_and_read_config(fname=''):
@@ -187,7 +189,6 @@ def expand_shell_variable(V):
     else:
         return V
 
-
 def command_line_options():
    
    p = ap.ArgumentParser( 
@@ -213,6 +214,7 @@ def command_line_options():
    p.add_argument('--dryrun', action='store_true',help="print test names that would be run without running them")
    p.add_argument('--settings', action='store_true', help="report variable settings")
    p.add_argument('--force', action='store_true', help="force run to occur despite a lock file being present")
+   p.add_argument('--tests', nargs='+', default=[])
    args = p.parse_args()
    return args
  
@@ -333,7 +335,8 @@ def send_failure_notification():
 
 
 def before_run():
-   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE, TIMESTAMP
+   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE, TIMESTAMP, TESTS
+
    args = command_line_options()
    find_and_read_config(fname=args.config)   
    args = command_line_options() 
@@ -344,6 +347,13 @@ def before_run():
    if args.verbose:  VERBOSE=args.verbose
    if args.rocmdir:  ROCMDIR=args.rocmdir
    if args.timestamp:  TIMESTAMP=True
+
+   if args.tests:    
+      TESTS=args.tests
+   else:
+      test_list = os.listdir(TESTDIR)
+      test_list.sort()
+      TESTS=test_list
    
 #   get_env_if_needed(TESTDIR)
 #   get_env_if_needed(RUNDIR)
@@ -363,6 +373,8 @@ ROCMDIR={ROCMDIR}
 FORCE={FORCE}
 TIMESTAMP={TIMESTAMP}
 """)
+      
+      print(f"tests={", ".join(TESTS)}")
       exit(0)
 
    if check_if_running():
@@ -392,18 +404,16 @@ TIMESTAMP={TIMESTAMP}
 
 
 def main():
-   global TIMEOUT, DRYRUN, VERBOSE, TIMESTAMP
+   global TIMEOUT, DRYRUN, VERBOSE, TIMESTAMP, TESTS
    ################################################################################
    # tests: return a 0 on success, and non-zero on failure
    ################################################################################
 
-   test_list = os.listdir(TESTDIR)
-   test_list.sort()
    tests = {}
 
    PASSED=True
    # run them in serial for now
-   for test in test_list:       
+   for test in TESTS:       
       testname = f"ROCMDIR={ROCMDIR} {TESTDIR}/{test} "
       if VERBOSE: print(f"test = {test}, cmd = \'{testname}\'")
       if DRYRUN:
