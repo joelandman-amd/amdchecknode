@@ -15,6 +15,7 @@
 #
 
 import argparse as ap
+from datetime import datetime as dt
 from multiprocessing import Process
 import os
 from pathlib import Path
@@ -30,11 +31,13 @@ ALL=False
 VERBOSE=False
 DRYRUN=False
 FORCE=False
+TIMESTAMP=False
 RUNDIR='/tmp/amdchecknode'
 ROCMDIR='/opt/rocm'
 TESTDIR=''
 TIMEOUT=60
 CHKNODECONF=''
+RUNFROM=os.path.abspath(os.path.dirname(__file__))
 
 # set up signal handlers so as to do the right thing
 # if we catch specific signals
@@ -93,10 +96,11 @@ def sigwarns(number,frame):
 #  VERBOSE           integer        1 == true, 0 == false
 #  DRYRUN            integer        1 == true, 0 == false
 #  FORCE             integer        1 == true, 0 == false
+#  TIMESTAMP         integer        1 == true, 0 == false
 
 
 def find_and_read_config(fname=''):
-   global TESTDIR, SLURM_CONF, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF, ROCMDIR, FORCE
+   global TESTDIR, TIMESTAMP, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF, ROCMDIR, FORCE
    if fname == None:
       fname=''
 
@@ -136,8 +140,7 @@ def find_and_read_config(fname=''):
          
          kvp_l = kvp.split('=')
          if kvp_l[0] == 'TESTDIR':
-            TESTDIR=expand_shell_variable(kvp_l[1])
-            
+            TESTDIR=expand_shell_variable(kvp_l[1])  
          
          if kvp_l[0] == 'ROCMDIR':
             ROCMDIR=expand_shell_variable(kvp_l[1])
@@ -153,6 +156,12 @@ def find_and_read_config(fname=''):
                VERBOSE=False
             else:
                VERBOSE=True
+
+         if kvp_l[0] == 'TIMESTAMP':
+            if kvp_l[1] == 0:
+               TIMESTAMP=False
+            else:
+               TIMESTAMP=True
             
          if kvp_l[0] == 'DRYRUN':
             if kvp_l[1] == 0:
@@ -196,6 +205,8 @@ def command_line_options():
    p.add_argument('--rundir', help="set run directory")
    p.add_argument('--rocmdir', help="set rocm install directory")
    p.add_argument('--config', help="set config directory")
+   p.add_argument('--timestamp', action='store_true',help="timestamp the stdout/stderr")
+  
    #p.add_argument('--slurm', help="set slurm directory")
    #p.add_argument('--parallel', help="run tests in parallel (defaults to serial)")
    p.add_argument('--timeout', help="timeout in seconds for each script to complete")
@@ -253,20 +264,67 @@ def set(path,content):
       pass
    return result
 
-def run(cmdstr):
-   global TIMEOUT
+def runcmd(cmdstr):
+   global TIMEOUT, RUNFROM
    # run a command, return a return code, stdout, and stderr
    # if thgere is an error running the command, return None, and two blank strings
+
+   
    try:
       s = sp.run(cmdstr,
                   capture_output=True,
                   shell=True,
                   universal_newlines=True,
+                  cwd=RUNFROM,
                   timeout=TIMEOUT
       )
    except:
-      return (None,"","")
+      return (None,None,None)
    return (s.returncode, s.stdout, s.stderr)
+
+
+def run(cmdstr):
+   global TIMEOUT, TIMESTAMP, RUNFROM
+   # run a command, return a return code, stdout, and stderr
+   # if thgere is an error running the command, return None, and two blank strings
+
+   if TIMESTAMP:
+      return run_ts(cmdstr)
+   else:   
+      try:
+         s = sp.run(cmdstr,
+                     capture_output=True,
+                     shell=True,
+                     universal_newlines=True,
+                     cwd=RUNFROM,
+                     timeout=TIMEOUT
+         )
+      except:
+         return (None,"","")
+      return (s.returncode, s.stdout, s.stderr)
+
+def run_ts(cmdstr):
+   global TIMEOUT, TIMESTAMP, RUNFROM
+   # run a command, return a return code, stdout, and stderr
+   # if thgere is an error running the command, return None, and two blank strings
+   rc = None
+   out=''
+   s = sp.Popen(cmdstr,stdout=sp.PIPE, 
+                 stderr=sp.PIPE,  shell=True, cwd=RUNFROM,
+                 universal_newlines=True)
+   for line in s.stdout:  
+      l = line.rstrip()
+      now = dt.now()
+      ts = now.strftime("[%Y-%m-%d %H:%M:%S.%f]")
+      print(f"{ts} {l}")
+      out += line
+      
+   s.poll()
+   rc=s.returncode
+   out = [i for i in s.stdout]
+   err = [i for i in s.stderr]
+
+   return (rc, out, err)
 
 def send_failure_notification():
    # this is where we send either a RedFish event,
@@ -275,7 +333,7 @@ def send_failure_notification():
 
 
 def before_run():
-   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE
+   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE, TIMESTAMP
    args = command_line_options()
    find_and_read_config(fname=args.config)   
    args = command_line_options() 
@@ -285,6 +343,8 @@ def before_run():
    if args.rundir:   RUNDIR=args.rundir
    if args.verbose:  VERBOSE=args.verbose
    if args.rocmdir:  ROCMDIR=args.rocmdir
+   if args.timestamp:  TIMESTAMP=True
+   
 #   get_env_if_needed(TESTDIR)
 #   get_env_if_needed(RUNDIR)
 #   get_env_if_needed(ROCMDIR)
@@ -301,6 +361,7 @@ TESTDIR={TESTDIR}
 RUNDIR={RUNDIR}
 ROCMDIR={ROCMDIR}
 FORCE={FORCE}
+TIMESTAMP={TIMESTAMP}
 """)
       exit(0)
 
@@ -320,7 +381,8 @@ FORCE={FORCE}
 
 
    # sanity check boot status
-   if re.match(r"No jobs running",run('systemctl list-jobs')[1]):
+   _lj = runcmd('systemctl list-jobs')[1]
+   if re.match(r"No jobs running",_lj):
       touch(f"{RUNDIR}/booted")
    else:
       if VERBOSE: print("Node is still booting\n")
@@ -330,7 +392,7 @@ FORCE={FORCE}
 
 
 def main():
-   global TIMEOUT, DRYRUN, VERBOSE
+   global TIMEOUT, DRYRUN, VERBOSE, TIMESTAMP
    ################################################################################
    # tests: return a 0 on success, and non-zero on failure
    ################################################################################
