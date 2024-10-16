@@ -374,7 +374,7 @@ FORCE={FORCE}
 TIMESTAMP={TIMESTAMP}
 """)
       
-      print(f"tests={", ".join(TESTS)}")
+      print(f"tests={', '.join(TESTS)}")
       exit(0)
 
    if check_if_running():
