@@ -32,6 +32,7 @@ VERBOSE=False
 DRYRUN=False
 FORCE=False
 TIMESTAMP=False
+REPEAT=1
 RUNDIR='/tmp/amdchecknode'
 ROCMDIR='/opt/rocm'
 TESTDIR=''
@@ -98,11 +99,12 @@ def sigwarns(number,frame):
 #  DRYRUN            integer        1 == true, 0 == false
 #  FORCE             integer        1 == true, 0 == false
 #  TIMESTAMP         integer        1 == true, 0 == false
+#  REPEAT            integer        1 to 2^32-1
 #  
 
 
 def find_and_read_config(fname=''):
-   global TESTDIR, TIMESTAMP, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF, ROCMDIR, FORCE
+   global TESTDIR, TIMESTAMP, VERBOSE, DRYRUN, RUNDIR, TIMEOUT, CHKNODECONF, ROCMDIR, FORCE, REPEAT
    if fname == None:
       fname=''
 
@@ -153,6 +155,9 @@ def find_and_read_config(fname=''):
          if kvp_l[0] == 'TIMEOUT':
             TIMEOUT=float(kvp_l[1])
       
+         if kvp_l[0] == 'REPEAT':
+            REPEAT=int(kvp_l[1])
+
          if kvp_l[0] == 'VERBOSE':
             if kvp_l[1] == 0:
                VERBOSE=False
@@ -176,8 +181,6 @@ def find_and_read_config(fname=''):
                FORCE=False
             else:
                FORCE=True
-            
-  
 
    except:
       pass         
@@ -215,6 +218,8 @@ def command_line_options():
    p.add_argument('--settings', action='store_true', help="report variable settings")
    p.add_argument('--force', action='store_true', help="force run to occur despite a lock file being present")
    p.add_argument('--tests', nargs='+', default=[])
+   p.add_argument('--repeat',  help="repeat test(s) N times ")
+
    args = p.parse_args()
    return args
  
@@ -269,7 +274,7 @@ def set(path,content):
 def runcmd(cmdstr):
    global TIMEOUT, RUNFROM
    # run a command, return a return code, stdout, and stderr
-   # if thgere is an error running the command, return None, and two blank strings
+   # if there is an error running the command, return None, and two blank strings
 
    
    try:
@@ -288,7 +293,7 @@ def runcmd(cmdstr):
 def run(cmdstr):
    global TIMEOUT, TIMESTAMP, RUNFROM
    # run a command, return a return code, stdout, and stderr
-   # if thgere is an error running the command, return None, and two blank strings
+   # if there is an error running the command, return None, and two blank strings
 
    if TIMESTAMP:
       return run_ts(cmdstr)
@@ -307,35 +312,30 @@ def run(cmdstr):
 
 def run_ts(cmdstr):
    global TIMEOUT, TIMESTAMP, RUNFROM
-   # run a command, return a return code, stdout, and stderr
-   # if thgere is an error running the command, return None, and two blank strings
+   # run a command, return a return code, stdout. Stderr is fused with stdout 
+   # if there is an error running the command, return None, and two blank strings
    rc = None
    out=''
    s = sp.Popen(cmdstr,stdout=sp.PIPE, 
-                 stderr=sp.PIPE,  shell=True, cwd=RUNFROM,
+                 stderr=sp.STDOUT,  shell=True, cwd=RUNFROM,
                  universal_newlines=True)
    for line in s.stdout:  
       l = line.rstrip()
       now = dt.now()
       ts = now.strftime("[%Y-%m-%d %H:%M:%S.%f]")
+      out += ts + " " + line
       print(f"{ts} {l}")
-      out += line
       
    s.poll()
    rc=s.returncode
-   out = [i for i in s.stdout]
-   err = [i for i in s.stderr]
+   #out = [i for i in s.stdout]
+   #err = [i for i in s.stderr]
+   err = None
 
    return (rc, out, err)
 
-def send_failure_notification():
-   # this is where we send either a RedFish event,
-   # or something similar
-   pass
-
-
 def before_run():
-   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE, TIMESTAMP, TESTS
+   global TIMEOUT, VERBOSE, TESTDIR, DRYRUN, ROCMDIR, RUNDIR, FORCE, TIMESTAMP, TESTS, REPEAT
 
    args = command_line_options()
    find_and_read_config(fname=args.config)   
@@ -347,6 +347,7 @@ def before_run():
    if args.verbose:  VERBOSE=args.verbose
    if args.rocmdir:  ROCMDIR=args.rocmdir
    if args.timestamp:  TIMESTAMP=True
+   if args.repeat:     REPEAT=int(args.repeat)
 
    if args.tests:    
       TESTS=args.tests
@@ -372,6 +373,7 @@ RUNDIR={RUNDIR}
 ROCMDIR={ROCMDIR}
 FORCE={FORCE}
 TIMESTAMP={TIMESTAMP}
+REPEAT={REPEAT}
 """)
       
       print(f"tests={', '.join(TESTS)}")
@@ -412,36 +414,35 @@ def main():
    tests = {}
 
    PASSED=True
-   # run them in serial for now
-   for test in TESTS:       
-      testname = f"ROCMDIR={ROCMDIR} {TESTDIR}/{test} "
-      if VERBOSE: print(f"test = {test}, cmd = \'{testname}\'")
-      if DRYRUN:
-         print(" ... Dry run, not actually running this code\n")
-      else:
-         if VERBOSE: print(f" Beginning run of {test}")
-         t_initial = time.time()
-         ret = run(testname)
-         t_final = time.time()
-         dt = t_final - t_initial
-         to = False
-         if dt >= TIMEOUT:
-            to = True
-         tests[test] = {'name': test, 
-                        'runtime': t_final-t_initial, 
-                        'stderr': ret[2],
-                        'stdout': ret[1],
-                        'returncode': ret[0],
-                        'timed_out': to
-                        }
-         if ret[0] != 0:
-            PASSED=False
-            print(f"test {test} exited with a non-zero return code, terminating run\n")
-            print(f"\nstdout={ret[1]}\n\nstderr={ret[2]}\n\n")
-            break    # short circuit loop
-         if VERBOSE: print(f" End of run {test}\n delta t = {t_final-t_initial:.3f}\n return code = {ret[0]}\n stderr = {ret[2]}\n stdout = {ret[1]}\n")
+   for _REPEAT_ in range(REPEAT):
+      for test in TESTS:       
+         testname = f"ROCMDIR={ROCMDIR} {TESTDIR}/{test} "
+         if VERBOSE: print(f"test = {test}, cmd = \'{testname}\'")
+         if DRYRUN:
+            print(" ... Dry run, not actually running this code\n")
+         else:
+            if VERBOSE: print(f" Beginning run of {test}")
+            t_initial = time.time()
+            ret = run(testname)
+            t_final = time.time()
+            dt = t_final - t_initial
+            to = False
+            if dt >= TIMEOUT:
+               to = True
+            tests[test] = {'name': test, 
+                           'runtime': t_final-t_initial, 
+                           'stderr': ret[2],
+                           'stdout': ret[1],
+                           'returncode': ret[0],
+                           'timed_out': to
+                           }
+            if ret[0] != 0:
+               PASSED=False
+               print(f"test {test} exited with a non-zero return code, terminating run\n")
+               print(f"\nstdout={ret[1]}\n\nstderr={ret[2]}\n\n")
+               break    # short circuit loop
+            if VERBOSE: print(f" End of run {test}\n delta t = {t_final-t_initial:.3f}\n return code = {ret[0]}\n stderr = {ret[2]}\n stdout = {ret[1]}\n")
    if not(PASSED):
-      #raise RuntimeError(f"test {test} exited with a non-zero return code, terminating run")
       exit(1)
 
 if __name__ == '__main__':
