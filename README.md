@@ -31,16 +31,19 @@ usage: amdchecknode [-h] [-v] [--testdir TESTDIR] [--rundir RUNDIR] [--rocmdir R
 Amdchecknode runs tests to verify node health before a scheduler based job launch
 
 options:
-  -h, --help         show this help message and exit
-  -v, --verbose      force verbose
-  --testdir TESTDIR  set test directory
-  --rundir RUNDIR    set run directory
-  --rocmdir ROCMDIR  set rocm install directory
-  --config CONFIG    set config directory
-  --timeout TIMEOUT  timeout in seconds for each script to complete
-  --dryrun           print test names that would be run without running them
-  --settings         report variable settings
-  --force            force run to occur despite a lock file being present
+  -h, --help            show this help message and exit
+  -v, --verbose         force verbose
+  --testdir TESTDIR     set test directory
+  --rundir RUNDIR       set run directory
+  --rocmdir ROCMDIR     set rocm install directory
+  --config CONFIG       set config directory
+  --timestamp           timestamp the stdout/stderr
+  --timeout TIMEOUT     timeout in seconds for each script to complete
+  --dryrun              print test names that would be run without running them
+  --settings            report variable settings
+  --force               force run to occur despite a lock file being present
+  --tests TESTS [TESTS ...]
+  --repeat REPEAT       repeat test(s) N times
 ```
 
 This script needs to be run with elevated privileges. 
